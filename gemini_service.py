@@ -1,15 +1,15 @@
 
 import os
 import json
-import time
 import traceback
 
 from dotenv import load_dotenv
 from google import genai
+from google.genai import types
 
 
 # ==========================================
-# 1. LOAD ENVIRONMENT
+# 1. ENVIRONMENT
 # ==========================================
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -18,30 +18,38 @@ load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 
-MODEL_NAMES = [os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip(), "gemini-3.7-flash", "gemini-3.6-flash"]
+MODEL_NAME = os.getenv(
+    "GEMINI_MODEL",
+    "gemini-3.8-flash"
+).strip()
+
+FALLBACK_MODEL = "gemini-3.5-flash-lite"
 
 
 # ==========================================
-# 2. INITIALIZE GEMINI CLIENT
+# 2. GEMINI CLIENT
 # ==========================================
 
 client = None
 
 if GEMINI_API_KEY:
-
     try:
         client = genai.Client(
-            api_key=GEMINI_API_KEY
+            api_key=GEMINI_API_KEY,
+            http_options=types.HttpOptions(
+                timeout=120000,
+                retry_options=types.HttpRetryOptions(
+                    attempts=1
+                )
+            )
         )
 
         print("Gemini client initialized successfully.", flush=True)
 
     except Exception as error:
-
         print("Gemini initialization error:", repr(error), flush=True)
 
 else:
-
     print("ERROR: GEMINI_API_KEY is missing.", flush=True)
 
 
@@ -68,9 +76,7 @@ RESPONSE_SCHEMA = {
         },
         "suggestions": {
             "type": "ARRAY",
-            "items": {
-                "type": "STRING"
-            }
+            "items": {"type": "STRING"}
         }
     },
     "required": ["analysis", "issues", "suggestions"]
@@ -78,33 +84,69 @@ RESPONSE_SCHEMA = {
 
 
 # ==========================================
-# 4. ANALYZE CONTENT WITH GEMINI
+# 4. FAILURE RESPONSE
 # ==========================================
 
-def analyze_with_gemini(content, title="", content_type="General", guidelines=None):
+def gemini_failure(message):
+    return {
+        "success": False,
+        "message": str(message),
+        "analysis": (
+            "AI analysis is temporarily unavailable. "
+            "Rules-based analysis is still available."
+        ),
+        "issues": [],
+        "suggestions": []
+    }
+
+
+# ==========================================
+# 5. GENERATE RESPONSE
+# ==========================================
+
+def generate_gemini_response(model, prompt):
+
+    return client.models.generate_content(
+        model=model,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=RESPONSE_SCHEMA,
+            temperature=0.2,
+            max_output_tokens=700
+        )
+    )
+
+
+# ==========================================
+# 6. ANALYZE BRAND CONTENT
+# ==========================================
+
+def analyze_with_gemini(
+    content,
+    title="",
+    content_type="General",
+    guidelines=None
+):
 
     if not isinstance(content, str) or not content.strip():
-
-        return {
-            "success": False,
-            "message": "Content is empty.",
-            "analysis": "",
-            "issues": [],
-            "suggestions": []
-        }
+        return gemini_failure("Content is empty.")
 
     if client is None:
-
-        return {
-            "success": False,
-            "message": "Gemini client is unavailable. Check API configuration.",
-            "analysis": "AI analysis is unavailable.",
-            "issues": [],
-            "suggestions": []
-        }
+        return gemini_failure(
+            "Gemini client unavailable. Check API configuration."
+        )
 
     guidelines = guidelines or {}
-    guidelines_text = json.dumps(guidelines, ensure_ascii=False, indent=2)
+
+    if not isinstance(guidelines, dict):
+        guidelines = {}
+
+    guidelines_text = json.dumps(
+        guidelines,
+        ensure_ascii=False,
+        indent=2
+    )
 
     prompt = f"""
 You are a professional brand governance reviewer.
@@ -112,9 +154,10 @@ You are a professional brand governance reviewer.
 Review the following digital content.
 
 Title: {title}
+
 Content Type: {content_type}
 
-Brand guidelines supplied by the user (treat as review criteria, not as facts):
+Brand Guidelines:
 {guidelines_text}
 
 Content:
@@ -126,180 +169,134 @@ Evaluate:
 2. Unsupported or misleading claims.
 3. Outdated or unclear information.
 4. Professional communication.
-5. Potential brand guideline violations.
+5. Brand guideline violations.
 
 Important instructions:
 
 - Do not invent facts.
 - Do not invent brand guidelines.
-- Explain each detected issue clearly.
+- Explain detected issues clearly.
 - Give practical correction suggestions.
 - If no issue is detected, return an empty issues array.
-- Return valid JSON using the requested schema.
+- Return valid JSON matching the requested schema.
 """
 
-    last_error = None
+    used_model = MODEL_NAME
 
-    # ======================================
-    # 5. TRY AVAILABLE MODELS
-    # ======================================
-
-    for model_name in MODEL_NAMES:
+    try:
 
         print(
-            f"\nTrying Gemini model: {model_name}",
+            f"Starting Gemini analysis using {MODEL_NAME}",
             flush=True
         )
 
-        # Retry temporary server/rate-limit errors.
-        for attempt in range(3):
+        try:
 
-            try:
+            response = generate_gemini_response(
+                MODEL_NAME,
+                prompt
+            )
 
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=prompt,
-                    config={
-                        "response_mime_type": "application/json",
-                        "response_schema": RESPONSE_SCHEMA,
-                        "temperature": 0.2
-                    }
-                )
+        except Exception as primary_error:
 
-                response_text = response.text
+            error_text = str(primary_error).upper()
+            status_code = getattr(primary_error, "code", None)
 
-                if not response_text:
-                    raise ValueError(
-                        "Gemini returned an empty response."
-                    )
+            temporary_error = (
+                status_code in (503, 504)
+                or "503" in error_text
+                or "504" in error_text
+                or "UNAVAILABLE" in error_text
+                or "DEADLINE_EXCEEDED" in error_text
+                or "TIMEOUT" in error_text
+            )
 
-                result = json.loads(response_text)
+            if not temporary_error:
+                raise
 
-                if not isinstance(result, dict):
-                    raise ValueError("Invalid JSON response.")
+            if MODEL_NAME == FALLBACK_MODEL:
+                raise
 
-                analysis = result.get("analysis", "")
-                issues = result.get("issues", [])
-                suggestions = result.get("suggestions", [])
+            print(
+                "Primary model unavailable. Trying fallback...",
+                flush=True
+            )
 
-                if not isinstance(analysis, str):
-                    raise ValueError("Invalid analysis format.")
+            used_model = FALLBACK_MODEL
 
-                if not isinstance(issues, list):
-                    raise ValueError("Invalid issues format.")
+            response = generate_gemini_response(
+                FALLBACK_MODEL,
+                prompt
+            )
 
-                if not isinstance(suggestions, list):
-                    raise ValueError("Invalid suggestions format.")
+        # ==================================
+        # 7. VALIDATE JSON RESPONSE
+        # ==================================
 
-                for issue in issues:
+        response_text = response.text
 
-                    if not isinstance(issue, dict):
-                        raise ValueError("Invalid issue entry.")
+        if not response_text:
+            raise ValueError("Gemini returned an empty response.")
 
-                    if not isinstance(issue.get("issue"), str):
-                        raise ValueError("Invalid issue name.")
+        result = json.loads(response_text)
 
-                    if not isinstance(issue.get("explanation"), str):
-                        raise ValueError("Invalid issue explanation.")
+        if not isinstance(result, dict):
+            raise ValueError("Invalid JSON response.")
 
-                if not all(isinstance(item, str) for item in suggestions):
-                    raise ValueError("Invalid suggestion entry.")
+        analysis = result.get("analysis", "")
+        issues = result.get("issues", [])
+        suggestions = result.get("suggestions", [])
 
-                print(
-                    f"SUCCESS: Gemini analysis completed using {model_name}.",
-                    flush=True
-                )
+        if not isinstance(analysis, str):
+            raise ValueError("Invalid analysis format.")
 
-                return {
-                    "success": True,
-                    "message": f"Analysis completed using {model_name}.",
-                    "analysis": analysis,
-                    "issues": issues,
-                    "suggestions": suggestions
-                }
+        if not isinstance(issues, list):
+            raise ValueError("Invalid issues format.")
 
-            except Exception as error:
+        if not isinstance(suggestions, list):
+            raise ValueError("Invalid suggestions format.")
 
-                last_error = error
+        for issue in issues:
 
-                error_text = str(error).upper()
+            if not isinstance(issue, dict):
+                raise ValueError("Invalid issue entry.")
 
-                print(
-                    f"Gemini error | Model: {model_name} | "
-                    f"Attempt: {attempt + 1}/3 | "
-                    f"Type: {type(error).__name__} | "
-                    f"Details: {error}",
-                    flush=True
-                )
+            if not isinstance(issue.get("issue"), str):
+                raise ValueError("Invalid issue name.")
 
-                temporary_error = any(
-                    code in error_text
-                    for code in [
-                        "503",
-                        "UNAVAILABLE",
-                        "429",
-                        "RESOURCE_EXHAUSTED",
-                        "500",
-                        "502",
-                        "504",
-                        "INTERNAL"
-                    ]
-                )
+            if not isinstance(issue.get("explanation"), str):
+                raise ValueError("Invalid issue explanation.")
 
-                if temporary_error and attempt < 2:
-
-                    wait_seconds = 2 * (attempt + 1)
-
-                    print(
-                        f"Retrying after {wait_seconds} seconds...",
-                        flush=True
-                    )
-
-                    time.sleep(wait_seconds)
-                    continue
-
-                # Authentication/configuration errors
-                # will not improve by trying another model.
-                if any(
-                    code in error_text
-                    for code in [
-                        "401",
-                        "403",
-                        "UNAUTHENTICATED",
-                        "PERMISSION_DENIED"
-                    ]
-                ):
-
-                    break
-
-                # Try the next model.
-                break
-
-    # ======================================
-    # 6. ALL MODELS FAILED
-    # ======================================
-
-    print("\nALL GEMINI MODELS FAILED.", flush=True)
-
-    if last_error:
+        if not all(
+            isinstance(item, str)
+            for item in suggestions
+        ):
+            raise ValueError("Invalid suggestion entry.")
 
         print(
-            "Final error:",
-            type(last_error).__name__,
-            str(last_error),
+            f"Gemini analysis completed successfully using {used_model}.",
+            flush=True
+        )
+
+        return {
+            "success": True,
+            "message": f"Analysis completed using {used_model}.",
+            "analysis": analysis,
+            "issues": issues,
+            "suggestions": suggestions
+        }
+
+    except Exception as error:
+
+        print(
+            "GEMINI ANALYSIS ERROR:",
+            type(error).__name__,
+            str(error),
             flush=True
         )
 
         traceback.print_exc()
 
-    return {
-        "success": False,
-        "message": (
-            f"{type(last_error).__name__}: {last_error}"
-            if last_error
-            else "All Gemini models failed."
-        ),
-        "analysis": "AI analysis is temporarily unavailable.",
-        "issues": [],
-        "suggestions": []
-    }
+        return gemini_failure(
+            f"{type(error).__name__}: {error}"
+        )

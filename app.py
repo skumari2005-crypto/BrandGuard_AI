@@ -1,3 +1,4 @@
+
 import os
 import json
 import sqlite3
@@ -20,7 +21,7 @@ DATABASE = os.environ.get(
 
 
 def get_db_connection():
-    connection = sqlite3.connect(DATABASE)
+    connection = sqlite3.connect(DATABASE, timeout=10)
     connection.row_factory = sqlite3.Row
     return connection
 
@@ -44,12 +45,12 @@ def initialize_database():
         )
     """)
 
-    existing_columns = [
+    existing_columns = {
         row["name"]
         for row in connection.execute(
             "PRAGMA table_info(reviews)"
         ).fetchall()
-    ]
+    }
 
     required_columns = {
         "analysis": "TEXT",
@@ -90,26 +91,37 @@ def serialize_review(row):
     }
 
 
+def json_error(message, status_code=400):
+    return jsonify({
+        "success": False,
+        "message": message
+    }), status_code
+
+
 def validate_content(data):
+
+    if not isinstance(data, dict):
+        return None, json_error("Invalid request data.")
+
     title = str(data.get("title", "")).strip()
     content = str(data.get("content", "")).strip()
+
     content_type = str(
         data.get("content_type", "General")
     ).strip() or "General"
 
     if not title:
-        return None, (jsonify({
-            "success": False,
-            "message": "Please enter a content title."
-        }), 400)
+        return None, json_error(
+            "Please enter a content title."
+        )
 
     if not content:
-        return None, (jsonify({
-            "success": False,
-            "message": "Please enter content to analyze."
-        }), 400)
+        return None, json_error(
+            "Please enter content to analyze."
+        )
 
     guidelines = data.get("guidelines", {})
+
     if not isinstance(guidelines, dict):
         guidelines = {}
 
@@ -122,19 +134,17 @@ def validate_content(data):
 
 
 def perform_analysis(data):
-    guidelines = data.get("guidelines") or {}
-    if not isinstance(guidelines, dict):
-        guidelines = {}
 
     rules_issues, rules_suggestions = analyze_brand_content(
-        data["content"], guidelines
+        data["content"],
+        data["guidelines"]
     )
 
     gemini_result = analyze_with_gemini(
         data["content"],
         data["title"],
         data["content_type"],
-        guidelines
+        data["guidelines"]
     )
 
     ai_issues = gemini_result.get("issues", [])
@@ -146,10 +156,7 @@ def perform_analysis(data):
     return {
         "issues": issues,
         "suggestions": suggestions,
-        "analysis": gemini_result.get("analysis", "") or (
-            "A rules-based review was completed. Configure a valid Gemini API key "
-            "to enable generative AI analysis."
-        ),
+        "analysis": gemini_result.get("analysis", ""),
         "gemini_success": gemini_result.get("success", False),
         "gemini_message": gemini_result.get("message", "")
     }
@@ -162,192 +169,263 @@ def home():
 
 @app.route("/analyze", methods=["POST"])
 def analyze():
-    data, error = validate_content(request.get_json(silent=True) or {})
 
-    if error:
-        return error
-
-    result = perform_analysis(data)
-    connection = get_db_connection()
-
-    cursor = connection.execute("""
-        INSERT INTO reviews (
-            title, content_type, content,
-            issues, suggestions, analysis,
-            status, created_at,
-            gemini_success, gemini_message
+    try:
+        data, error = validate_content(
+            request.get_json(silent=True) or {}
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        data["title"],
-        data["content_type"],
-        data["content"],
-        json.dumps(result["issues"]),
-        json.dumps(result["suggestions"]),
-        result["analysis"],
-        "Pending",
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        int(result["gemini_success"]),
-        result["gemini_message"]
-    ))
 
-    review_id = cursor.lastrowid
-    connection.commit()
+        if error:
+            return error
 
-    row = connection.execute(
-        "SELECT * FROM reviews WHERE id = ?",
-        (review_id,)
-    ).fetchone()
+        result = perform_analysis(data)
 
-    connection.close()
+        connection = get_db_connection()
 
-    return jsonify({
-        "success": True,
-        "message": "Content analyzed successfully.",
-        "review": serialize_review(row)
-    })
+        cursor = connection.execute("""
+            INSERT INTO reviews (
+                title, content_type, content,
+                issues, suggestions, analysis,
+                status, created_at,
+                gemini_success, gemini_message
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            data["title"],
+            data["content_type"],
+            data["content"],
+            json.dumps(result["issues"]),
+            json.dumps(result["suggestions"]),
+            result["analysis"],
+            "Pending",
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            int(result["gemini_success"]),
+            result["gemini_message"]
+        ))
+
+        review_id = cursor.lastrowid
+
+        connection.commit()
+
+        row = connection.execute(
+            "SELECT * FROM reviews WHERE id = ?",
+            (review_id,)
+        ).fetchone()
+
+        connection.close()
+
+        return jsonify({
+            "success": True,
+            "message": "Content analyzed successfully.",
+            "review": serialize_review(row)
+        })
+
+    except Exception as error:
+
+        app.logger.exception("Analyze route failed")
+
+        return json_error(
+            "Analysis failed: " + str(error),
+            500
+        )
 
 
 @app.route("/review/<int:review_id>", methods=["PUT"])
 def edit_review(review_id):
-    data, error = validate_content(request.get_json(silent=True) or {})
 
-    if error:
-        return error
+    try:
+        data, error = validate_content(
+            request.get_json(silent=True) or {}
+        )
 
-    connection = get_db_connection()
+        if error:
+            return error
 
-    existing = connection.execute(
-        "SELECT id FROM reviews WHERE id = ?",
-        (review_id,)
-    ).fetchone()
+        connection = get_db_connection()
 
-    if not existing:
+        existing = connection.execute(
+            "SELECT id FROM reviews WHERE id = ?",
+            (review_id,)
+        ).fetchone()
+
+        if not existing:
+            connection.close()
+            return json_error("Review not found.", 404)
+
+        result = perform_analysis(data)
+
+        connection.execute("""
+            UPDATE reviews
+            SET title = ?,
+                content_type = ?,
+                content = ?,
+                issues = ?,
+                suggestions = ?,
+                analysis = ?,
+                status = ?,
+                created_at = ?,
+                gemini_success = ?,
+                gemini_message = ?
+            WHERE id = ?
+        """, (
+            data["title"],
+            data["content_type"],
+            data["content"],
+            json.dumps(result["issues"]),
+            json.dumps(result["suggestions"]),
+            result["analysis"],
+            "Pending",
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            int(result["gemini_success"]),
+            result["gemini_message"],
+            review_id
+        ))
+
+        connection.commit()
+
+        row = connection.execute(
+            "SELECT * FROM reviews WHERE id = ?",
+            (review_id,)
+        ).fetchone()
+
         connection.close()
+
         return jsonify({
-            "success": False,
-            "message": "Review not found."
-        }), 404
+            "success": True,
+            "message": "Review updated and re-analyzed successfully.",
+            "review": serialize_review(row)
+        })
 
-    result = perform_analysis(data)
+    except Exception as error:
 
-    connection.execute("""
-        UPDATE reviews
-        SET title = ?,
-            content_type = ?,
-            content = ?,
-            issues = ?,
-            suggestions = ?,
-            analysis = ?,
-            status = ?,
-            created_at = ?,
-            gemini_success = ?,
-            gemini_message = ?
-        WHERE id = ?
-    """, (
-        data["title"],
-        data["content_type"],
-        data["content"],
-        json.dumps(result["issues"]),
-        json.dumps(result["suggestions"]),
-        result["analysis"],
-        "Pending",
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        int(result["gemini_success"]),
-        result["gemini_message"],
-        review_id
-    ))
+        app.logger.exception("Edit review failed")
 
-    connection.commit()
-
-    row = connection.execute(
-        "SELECT * FROM reviews WHERE id = ?",
-        (review_id,)
-    ).fetchone()
-
-    connection.close()
-
-    return jsonify({
-        "success": True,
-        "message": "Review updated and re-analyzed successfully.",
-        "review": serialize_review(row)
-    })
+        return json_error(
+            "Review update failed: " + str(error),
+            500
+        )
 
 
 @app.route("/review/<int:review_id>", methods=["DELETE"])
 def delete_review(review_id):
+
     connection = get_db_connection()
 
-    existing = connection.execute(
-        "SELECT id FROM reviews WHERE id = ?",
-        (review_id,)
-    ).fetchone()
+    try:
+        cursor = connection.execute(
+            "DELETE FROM reviews WHERE id = ?",
+            (review_id,)
+        )
 
-    if not existing:
-        connection.close()
+        connection.commit()
+
+        if cursor.rowcount == 0:
+            return json_error("Review not found.", 404)
+
         return jsonify({
-            "success": False,
-            "message": "Review not found."
-        }), 404
+            "success": True,
+            "message": "Review deleted successfully."
+        })
 
-    connection.execute(
-        "DELETE FROM reviews WHERE id = ?",
-        (review_id,)
-    )
+    except Exception as error:
 
-    connection.commit()
-    connection.close()
+        app.logger.exception("Delete review failed")
 
-    return jsonify({
-        "success": True,
-        "message": "Review deleted successfully."
-    })
+        return json_error(
+            "Review deletion failed: " + str(error),
+            500
+        )
+
+    finally:
+        connection.close()
 
 
 @app.route("/approve/<int:review_id>", methods=["POST"])
 def approve_review(review_id):
+
     connection = get_db_connection()
 
-    cursor = connection.execute("""
-        UPDATE reviews
-        SET status = 'Approved'
-        WHERE id = ? AND status = 'Pending'
-    """, (review_id,))
+    try:
+        cursor = connection.execute("""
+            UPDATE reviews
+            SET status = 'Approved'
+            WHERE id = ? AND status = 'Pending'
+        """, (review_id,))
 
-    connection.commit()
-    connection.close()
+        connection.commit()
 
-    if cursor.rowcount == 0:
+        if cursor.rowcount == 0:
+            return json_error(
+                "Review not found or already approved.",
+                404
+            )
+
         return jsonify({
-            "success": False,
-            "message": "Review not found or already approved."
-        }), 404
+            "success": True,
+            "message": "Content approved successfully."
+        })
 
-    return jsonify({
-        "success": True,
-        "message": "Content approved successfully."
-    })
+    except Exception as error:
+
+        app.logger.exception("Approve review failed")
+
+        return json_error(
+            "Approval failed: " + str(error),
+            500
+        )
+
+    finally:
+        connection.close()
 
 
 @app.route("/reviews", methods=["GET"])
 def get_reviews():
+
     connection = get_db_connection()
 
-    rows = connection.execute(
-        "SELECT * FROM reviews ORDER BY id DESC"
-    ).fetchall()
+    try:
+        rows = connection.execute(
+            "SELECT * FROM reviews ORDER BY id DESC"
+        ).fetchall()
 
-    connection.close()
+        return jsonify([
+            serialize_review(row)
+            for row in rows
+        ])
 
-    return jsonify([
-        serialize_review(row)
-        for row in rows
-    ])
+    except Exception as error:
+
+        app.logger.exception("Get reviews failed")
+
+        return json_error(
+            "Could not load reviews: " + str(error),
+            500
+        )
+
+    finally:
+        connection.close()
+
+
+@app.errorhandler(404)
+def handle_not_found(error):
+    return json_error("Requested API route was not found.", 404)
+
+
+@app.errorhandler(500)
+def handle_server_error(error):
+    app.logger.exception("Internal server error")
+    return json_error("Internal server error.", 500)
 
 
 initialize_database()
 
 
 if __name__ == "__main__":
+
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=False)
+
+    app.run(
+        host="0.0.0.0",
+        port=port,
+        debug=False
+    )
