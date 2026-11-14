@@ -124,6 +124,17 @@
                     <label for="brandRules">Additional Brand Rules</label>
                     <textarea id="brandRules" rows="4" placeholder="Enter brand rules"></textarea>
 
+                    <label for="requiredDisclaimer">Required Disclaimer (optional)</label>
+                    <textarea id="requiredDisclaimer" rows="2" placeholder="Required legal or brand disclaimer"></textarea>
+
+                    <label for="brandColors">Approved Brand Colours (HEX codes)</label>
+                    <input id="brandColors" type="text" placeholder="#172554, #2563EB, #FFFFFF">
+                    <p class="muted">Enter comma-separated HEX colours to compare with submitted creative artwork.</p>
+
+                    <label for="brandLogoFile">Approved Logo Reference (optional)</label>
+                    <input id="brandLogoFile" type="file" accept="image/png,image/jpeg,image/webp">
+                    <p class="muted">Logo reference stays in this browser and is used for an approximate visual comparison.</p>
+
                     <button class="primary-btn" type="submit">Save Guidelines</button>
                     <p id="guidelinesMessage" class="message"></p>
                 </form>
@@ -154,6 +165,10 @@
 
                     <label for="contentText">Content to Review</label>
                     <textarea id="contentText" rows="8" required placeholder="Paste your content here..."></textarea>
+
+                    <label for="creativeImage">Creative / Advertisement Image (optional)</label>
+                    <input id="creativeImage" type="file" accept="image/png,image/jpeg,image/webp">
+                    <p class="muted">Upload the image or social creative to check its dominant colours and send it to Gemini for visual review.</p>
 
                     <div class="form-actions">
                         <button class="primary-btn" id="submitContentBtn" type="submit">
@@ -225,11 +240,12 @@
                                 <th>Type</th>
                                 <th>Date</th>
                                 <th>Status</th>
+                                <th>Score</th>
                                 <th>Actions</th>
                             </tr>
                         </thead>
                         <tbody id="historyList">
-                            <tr><td colspan="5">No reviews yet.</td></tr>
+                            <tr><td colspan="6">No reviews yet.</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -256,8 +272,12 @@
                 </div>
             </div>
             <div class="content-card">
-                <h3>Review Summary</h3>
+                <div class="section-heading">
+                    <h3>Detailed Compliance Report</h3>
+                    <button class="secondary-btn" type="button" onclick="window.print()">Print / Save PDF</button>
+                </div>
                 <p id="reportSummary">No report data available yet.</p>
+                <div id="reportDetails"><p>Submit content to generate a detailed report.</p></div>
             </div>
         </section>
 

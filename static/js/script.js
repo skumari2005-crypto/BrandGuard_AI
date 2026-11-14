@@ -75,6 +75,7 @@ function updateDashboard() {
         (sum, review) => sum + (review.issues || []).length,
         0
     );
+    const averageScore = total ? Math.round(reviews.reduce((sum, r) => sum + Number(r.compliance_score ?? 100), 0) / total) : 0;
 
     $("totalReviews").textContent = total;
     $("pendingReviews").textContent = pending;
@@ -84,9 +85,8 @@ function updateDashboard() {
     $("reportReviews").textContent = total;
     $("reportApproved").textContent = approved;
     $("reportIssues").textContent = issueCount;
-
     $("reportSummary").textContent = total
-        ? `${total} reviews have been recorded. ${approved} are approved and ${pending} are pending. ${issueCount} issues have been detected.`
+        ? `${total} reviews recorded · ${approved} approved · ${pending} pending · ${issueCount} findings · Average compliance score: ${averageScore}%.`
         : "No report data available yet.";
 
     renderRecentReviews();
@@ -116,7 +116,7 @@ function renderHistory() {
     const body = $("historyList");
 
     if (!reviews.length) {
-        body.innerHTML = '<tr><td colspan="5">No reviews yet.</td></tr>';
+        body.innerHTML = '<tr><td colspan="6">No reviews yet.</td></tr>';
         return;
     }
 
@@ -126,7 +126,9 @@ function renderHistory() {
             <td>${escapeHTML(review.content_type)}</td>
             <td>${escapeHTML(formatDate(review.created_at))}</td>
             <td><span class="status ${review.status === "Approved" ? "approved" : "pending"}">${escapeHTML(review.status)}</span></td>
+            <td>${Number(review.compliance_score ?? 100)}%</td>
             <td class="action-cell">
+                <button class="action-btn" data-action="report" data-id="${review.id}">Report</button>
                 <button class="action-btn edit-btn" data-action="edit" data-id="${review.id}">Edit</button>
                 <button class="action-btn delete-btn" data-action="delete" data-id="${review.id}">Delete</button>
             </td>
@@ -174,9 +176,16 @@ function displayAnalysis(review) {
         </div>
         <p><strong>Content Type:</strong> ${escapeHTML(review.content_type)}</p>
         <p><strong>Review ID:</strong> ${review.id}</p>
+        <div class="score-panel"><span>Compliance Score</span><strong>${Number(review.compliance_score ?? 100)}%</strong><small>${escapeHTML((review.report || {}).grade || "Assessment")}</small></div>
         <p><strong>AI Status:</strong> ${review.gemini_success ? "Gemini AI + rules review completed" : "Rules-based fallback (AI connection unavailable)"}</p>
         <p>${escapeHTML(review.analysis || "No additional AI summary available.")}</p>
         <p class="muted">${escapeHTML(review.gemini_message || "")}</p>
+        <div class="submitted-content">
+            <h4>Visual Brand Analysis</h4>
+            <p>${escapeHTML((review.visual_analysis || {}).message || "No visual analysis was saved.")}</p>
+            ${((review.visual_analysis || {}).palette || []).length ? `<div class="palette-row">${review.visual_analysis.palette.map(c => `<span title="${escapeHTML(c.hex)}" style="background:${escapeHTML(c.hex)}"></span><small>${escapeHTML(c.hex)} · ${escapeHTML(c.share)}%</small>`).join("")}</div>` : ""}
+            ${((review.visual_analysis || {}).checks || []).map(c => `<p><strong>${escapeHTML(c.name)}:</strong> ${escapeHTML(c.status)} — ${escapeHTML(c.details)}</p>`).join("")}
+        </div>
         <div class="submitted-content">
             <h4>Submitted Content</h4>
             <p>${escapeHTML(review.content)}</p>
@@ -188,10 +197,16 @@ function displayAnalysis(review) {
         ? issues.map((issue, index) => `
             <div class="result-item issue-item">
                 <strong>Issue ${index + 1}</strong>
+                ${typeof issue === "object" ? `<span class="severity-label severity-${escapeHTML(String(issue.severity || "Medium").toLowerCase())}">${escapeHTML(issue.severity || "Medium")}</span><small>${escapeHTML(issue.category || "Brand review")} · ${escapeHTML(issue.source || "Review")}</small>` : ""}
                 <p>${escapeHTML(getIssueText(issue))}</p>
+                ${issue && typeof issue === "object" && issue.explanation ? `<p>${escapeHTML(issue.explanation)}</p>` : ""}
             </div>
         `).join("")
         : "<p>No issues detected.</p>";
+
+    const report = review.report || {};
+    $("reportDetails").innerHTML = `<p><strong>Review #${review.id}</strong> · ${escapeHTML(report.generated_at || review.created_at || "")}</p><p><strong>Score:</strong> ${Number(review.compliance_score ?? 100)}% · <strong>Grade:</strong> ${escapeHTML(report.grade || "—")}</p><p><strong>Findings:</strong> ${Number(report.issue_count ?? issues.length)} · <strong>High severity:</strong> ${Number(report.high_severity ?? 0)}</p>${(report.sections || []).map(section => `<p><strong>${escapeHTML(section.name)}:</strong> ${escapeHTML(section.result)}</p>`).join("")}<h4>Review activity</h4><div id="reviewEventList">Loading activity...</div>`;
+    loadReviewEvents(review.id);
 
     const suggestions = review.suggestions || [];
     $("suggestionsList").innerHTML = suggestions.length
@@ -202,6 +217,27 @@ function displayAnalysis(review) {
             </div>
         `).join("")
         : "<p>No correction suggestions available.</p>";
+}
+
+async function readFileAsDataURL(file) {
+    if (!file) return "";
+    if (file.size > 5 * 1024 * 1024) throw new Error("Each image must be smaller than 5 MB.");
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ""));
+        reader.onerror = () => reject(new Error("Could not read the selected image."));
+        reader.readAsDataURL(file);
+    });
+}
+
+async function loadReviewEvents(reviewId) {
+    const target = $("reviewEventList");
+    if (!target) return;
+    try {
+        const response = await fetch(`/review/${reviewId}/events`);
+        const events = await response.json();
+        target.innerHTML = events.length ? events.map(item => `<p><strong>${escapeHTML(item.event)}</strong> · ${escapeHTML(formatDate(item.created_at))}<br>${escapeHTML(item.details || "")}</p>`).join("") : "<p>No activity recorded.</p>";
+    } catch (_) { target.textContent = "Activity history could not be loaded."; }
 }
 
 async function loadReviews() {
@@ -224,7 +260,7 @@ async function loadReviews() {
     } catch (error) {
         console.error(error);
         $("historyList").innerHTML =
-            '<tr><td colspan="5">Could not load review history. Refresh the page.</td></tr>';
+            '<tr><td colspan="6">Could not load review history. Refresh the page.</td></tr>';
     }
 }
 
@@ -253,6 +289,8 @@ $("contentForm").addEventListener("submit", async (event) => {
 
         const method = editingReviewId ? "PUT" : "POST";
 
+        const imageData = await readFileAsDataURL($("creativeImage").files[0]);
+        const savedGuidelines = (() => { try { return JSON.parse(localStorage.getItem("brandGuardGuidelines") || "{}"); } catch (_) { return {}; } })();
         const response = await fetch(url, {
             method,
             headers: {
@@ -262,10 +300,9 @@ $("contentForm").addEventListener("submit", async (event) => {
                 title,
                 content,
                 content_type,
-                guidelines: (() => {
-                    try { return JSON.parse(localStorage.getItem("brandGuardGuidelines") || "{}"); }
-                    catch (_) { return {}; }
-                })()
+                image_data: imageData,
+                logo_reference_data: savedGuidelines.logoReferenceData || "",
+                guidelines: savedGuidelines
             })
         });
 
@@ -401,6 +438,7 @@ document.addEventListener("click", (event) => {
     if (action === "edit") startEdit(reviewId);
     if (action === "delete") deleteReview(reviewId);
     if (action === "approve") approveReview(reviewId);
+    if (action === "report") { const selected = reviews.find(item => item.id === reviewId); if (selected) { displayAnalysis(selected); showPage("analysis"); } }
 });
 
 $("guidelinesForm").addEventListener("submit", (event) => {
@@ -411,12 +449,27 @@ $("guidelinesForm").addEventListener("submit", (event) => {
         brandTone: $("brandTone").value,
         approvedKeywords: $("approvedKeywords").value,
         restrictedWords: $("restrictedWords").value,
-        brandRules: $("brandRules").value
+        brandRules: $("brandRules").value,
+        requiredDisclaimer: $("requiredDisclaimer").value,
+        brandColors: $("brandColors").value,
+        logoReferenceData: JSON.parse(localStorage.getItem("brandGuardGuidelines") || "{}").logoReferenceData || ""
     };
 
-    localStorage.setItem("brandGuardGuidelines", JSON.stringify(guidelines));
+    const logoFile = $("brandLogoFile").files[0];
+    if (logoFile) {
+        if (logoFile.size > 2 * 1024 * 1024) { showMessage("guidelinesMessage", "Please choose a logo image smaller than 2 MB.", true); return; }
+        readFileAsDataURL(logoFile).then(data => {
+            guidelines.logoReferenceData = data;
+            localStorage.setItem("brandGuardGuidelines", JSON.stringify(guidelines));
+            showMessage("guidelinesMessage", "Brand guidelines and logo reference saved in this browser.");
+        }).catch(error => showMessage("guidelinesMessage", error.message, true));
+    } else {
+        localStorage.setItem("brandGuardGuidelines", JSON.stringify(guidelines));
+        showMessage("guidelinesMessage", "Brand guidelines saved in this browser.");
+    }
 
-    showMessage("guidelinesMessage", "Brand guidelines saved in this browser.");
+    /* message is set after optional logo processing */
+    /* keep this form local so existing browser-based settings remain compatible */
 });
 
 function loadGuidelines() {
@@ -431,6 +484,8 @@ function loadGuidelines() {
         $("approvedKeywords").value = data.approvedKeywords || "";
         $("restrictedWords").value = data.restrictedWords || "";
         $("brandRules").value = data.brandRules || "";
+        $("requiredDisclaimer").value = data.requiredDisclaimer || "";
+        $("brandColors").value = data.brandColors || "";
 
     } catch (error) {
         console.error("Could not load saved guidelines.", error);
