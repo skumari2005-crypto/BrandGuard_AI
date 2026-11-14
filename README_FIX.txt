@@ -1,41 +1,98 @@
-BRANDGUARD AI - PATCHED VERSION
+# BrandGuard AI
+### AI-Powered Brand Governance and Content Review Platform
 
-WHAT WAS FIXED
-1. Brand Guidelines stored in browser localStorage are now sent with every analysis request.
-2. The backend passes those guidelines to both the deterministic rules engine and Gemini prompt.
-3. Rules engine now checks configured restricted words, approved keywords, tone-related signals,
-   absolute/high-risk claims, excessive capitalization, and very short content.
-4. Rule-based results are returned even if Gemini is unavailable. The interface labels this honestly
-   as a rules-based fallback, not successful AI analysis.
-5. Gemini model selection can be configured with GEMINI_MODEL; default is gemini-3.8-flash.
+**Project:** BrandGuard AI  
+**Hackathon:** CodeTitans India 2026  
+**Team Name:** CodewithSweta  
+**Technology Stack:** Python, Flask, SQLite, Gemini AI, HTML, CSS, JavaScript
 
-SETUP (WINDOWS / VS CODE)
-1. Extract this ZIP.
-2. Open the extracted BrandGuard_AI folder in VS Code.
-3. Open Terminal > New Terminal.
-4. Create/activate a virtual environment if needed:
-   py -m venv .venv
-   .venv\\Scripts\\activate
-5. Install packages:
-   py -m pip install -r requirements.txt
-6. Copy .env.example to a new file named .env.
-7. Add a NEW Gemini API key to .env (do not share or commit this file).
-8. Run:
-   py app.py
-9. Open http://127.0.0.1:5000
+## 1. Project Overview
 
-IMPORTANT SECURITY
-The ZIP uploaded for debugging contained a .env file. Treat that API key as exposed:
-revoke/delete that key in Google AI Studio and create a new one. Do not upload the new .env.
-The patched ZIP intentionally excludes .env, .venv, and the local database.
+BrandGuard AI is an intelligent brand-governance platform designed to review digital content before publication.
 
-DEMO TEST
-Save these guidelines:
-Brand Tone: Professional and trustworthy
-Approved Keywords: reliable, transparent, customer-first
-Restricted Words: guaranteed, fake, unlimited
+It helps organizations maintain consistent brand communication by checking submitted content against approved brand guidelines, verified information, and brand requirements.
 
-Then analyze:
+## 2. Key Features
+
+- **Brand Guidelines Management:** Configure brand tone, approved keywords, restricted words, brand rules, disclaimers, and approved colours.
+- **AI-Powered Content Analysis:** Uses Gemini AI to evaluate submitted content against configured brand requirements.
+- **Rule-Based Validation:** Detects restricted words, missing approved keywords, risky claims, excessive capitalization, and other content issues.
+- **Actionable Recommendations:** Provides explanations and suggestions to improve content quality.
+- **Analysis Fallback:** Provides rule-based results when Gemini AI is unavailable.
+- **Content Review Workflow:** Supports reviewing submitted content before publication.
+
+## 3. Technology Stack
+
+| Technology | Purpose |
+|---|---|
+| Python | Backend development |
+| Flask | Web framework |
+| SQLite | Database |
+| Gemini AI | AI-powered content analysis |
+| HTML | Page structure |
+| CSS | User interface styling |
+| JavaScript | Frontend functionality |
+
+## 4. Project Setup
+
+### Prerequisites
+- Python 3
+- Visual Studio Code
+- Gemini API Key
+
+### Installation
+
+1. Clone the project repository or open the existing project folder.
+2. Open the project in Visual Studio Code.
+3. Create a virtual environment:
+
+   `py -m venv .venv`
+
+4. Activate the environment:
+
+   `.venv\Scripts\activate`
+
+5. Install dependencies:
+
+   `py -m pip install -r requirements.txt`
+
+6. Configure the required environment variables using a local `.env` file.
+
+7. Start the application:
+
+   `py app.py`
+
+8. Open the application in your browser:
+
+   `http://127.0.0.1:5000`
+
+## 5. Environment Configuration
+
+Configure the following environment variables:
+
+- `GEMINI_API_KEY` – Gemini API authentication key.
+- `GEMINI_MODEL` – Optional Gemini model selection.
+
+Keep API credentials private. Never commit `.env` files or secret keys to GitHub.
+
+## 6. Demo Test Case
+
+**Brand Guidelines**
+
+- Brand Tone: Professional and trustworthy
+- Approved Keywords: reliable, transparent, customer-first
+- Restricted Words: guaranteed, fake, unlimited
+
+**Sample Content**
+
 "GUARANTEED! Our product is 100% risk-free and unlimited. Buy now!!!"
-Expected: rule-based flags for restricted terms, high-risk claims, capitalization and missing
-approved keywords, plus corrective suggestions. Gemini results will be added when API access works.
+
+**Expected Analysis**
+
+The system should identify restricted words, potentially misleading claims, excessive capitalization, and missing approved keywords, and provide corrective suggestions.
+
+## 7. Project Objective
+
+BrandGuard AI aims to reduce brand-related communication risks, improve content consistency, and help organizations publish accurate, trustworthy, and brand-aligned digital content.
+
+**Developed for CodeTitans India 2026 – Round 3.**
