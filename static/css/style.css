@@ -519,3 +519,22 @@ td {
         font-size: 24px;
     }
 }
+
+/* Final-round compliance and visual review additions */
+.score-panel { display:flex; align-items:center; gap:14px; flex-wrap:wrap; padding:16px 18px; margin:18px 0; border:1px solid rgba(100,116,139,.28); border-radius:14px; background:rgba(37,99,235,.07); }
+.score-panel span { font-weight:600; }
+.score-panel strong { font-size:2rem; color:var(--primary, #2563eb); }
+.score-panel small { color:#64748b; }
+.palette-row { display:flex; align-items:center; flex-wrap:wrap; gap:9px; margin:12px 0; }
+.palette-row span { width:25px; height:25px; border:1px solid rgba(0,0,0,.18); border-radius:6px; display:inline-block; }
+.palette-row small { margin-right:8px; color:#64748b; }
+#reportDetails { border-top:1px solid rgba(100,116,139,.22); margin-top:14px; padding-top:12px; }
+#reviewEventList p { padding:8px 12px; border-left:3px solid #2563eb; background:rgba(100,116,139,.07); margin:8px 0; }
+input[type="file"] { display:block; width:100%; padding:10px; border:1px dashed rgba(100,116,139,.5); border-radius:9px; margin:7px 0 12px; }
+@media print { .sidebar, .topbar, .page:not(#analysis), .main-footer, button { display:none !important; } .main-content { margin:0 !important; padding:0 !important; } #analysis { display:block !important; } body { background:#fff !important; } }
+
+.severity-label { display:inline-block; margin:6px 8px 4px 0; padding:3px 8px; border-radius:999px; font-size:.75rem; font-weight:700; background:rgba(100,116,139,.14); color:inherit; }
+.severity-high { background:rgba(220,38,38,.12); color:#b91c1c; }
+.severity-medium { background:rgba(217,119,6,.13); color:#92400e; }
+.severity-low { background:rgba(37,99,235,.12); color:#1d4ed8; }
+.severity-info { background:rgba(100,116,139,.14); color:#475569; }
